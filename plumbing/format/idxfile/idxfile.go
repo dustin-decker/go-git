@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"sort"
+	"sync"
 
 	encbin "encoding/binary"
 
@@ -58,6 +59,7 @@ type MemoryIndex struct {
 
 	offsetHash       map[int64]plumbing.Hash
 	offsetHashIsFull bool
+	offsetHashMutex  sync.RWMutex
 }
 
 var _ Index = (*MemoryIndex)(nil)
@@ -129,7 +131,10 @@ func (idx *MemoryIndex) FindOffset(h plumbing.Hash) (int64, error) {
 		// Save the offset for reverse lookup
 		if idx.offsetHash == nil {
 			idx.offsetHash = make(map[int64]plumbing.Hash)
+			idx.offsetHashMutex = sync.RWMutex{}
 		}
+		idx.offsetHashMutex.Lock()
+		defer idx.offsetHashMutex.Unlock()
 		idx.offsetHash[int64(offset)] = h
 	}
 
@@ -173,6 +178,8 @@ func (idx *MemoryIndex) FindHash(o int64) (plumbing.Hash, error) {
 	var ok bool
 
 	if idx.offsetHash != nil {
+		idx.offsetHashMutex.RLock()
+		defer idx.offsetHashMutex.RUnlock()
 		if hash, ok = idx.offsetHash[o]; ok {
 			return hash, nil
 		}
@@ -184,6 +191,8 @@ func (idx *MemoryIndex) FindHash(o int64) (plumbing.Hash, error) {
 			return plumbing.ZeroHash, err
 		}
 
+		idx.offsetHashMutex.RLock()
+		defer idx.offsetHashMutex.RUnlock()
 		hash, ok = idx.offsetHash[o]
 	}
 
@@ -203,6 +212,7 @@ func (idx *MemoryIndex) genOffsetHash() error {
 
 	idx.offsetHash = make(map[int64]plumbing.Hash, count)
 	idx.offsetHashIsFull = true
+	idx.offsetHashMutex = sync.RWMutex{}
 
 	var hash plumbing.Hash
 	i := uint32(0)
@@ -211,6 +221,8 @@ func (idx *MemoryIndex) genOffsetHash() error {
 		for secondLevel := uint32(0); i < fanoutValue; i++ {
 			copy(hash[:], idx.Names[mappedFirstLevel][secondLevel*objectIDLength:])
 			offset := int64(idx.getOffset(mappedFirstLevel, int(secondLevel)))
+			idx.offsetHashMutex.Lock()
+			defer idx.offsetHashMutex.Unlock()
 			idx.offsetHash[offset] = hash
 			secondLevel++
 		}
