@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"sort"
+	"sync"
 
 	encbin "encoding/binary"
 
@@ -58,6 +59,7 @@ type MemoryIndex struct {
 
 	offsetHash       map[int64]plumbing.Hash
 	offsetHashIsFull bool
+	offsetHashMutex  sync.RWMutex
 }
 
 var _ Index = (*MemoryIndex)(nil)
@@ -129,7 +131,10 @@ func (idx *MemoryIndex) FindOffset(h plumbing.Hash) (int64, error) {
 		// Save the offset for reverse lookup
 		if idx.offsetHash == nil {
 			idx.offsetHash = make(map[int64]plumbing.Hash)
+			idx.offsetHashMutex = sync.RWMutex{}
 		}
+		idx.offsetHashMutex.Lock()
+		defer idx.offsetHashMutex.Unlock()
 		idx.offsetHash[int64(offset)] = h
 	}
 
@@ -172,6 +177,9 @@ func (idx *MemoryIndex) FindHash(o int64) (plumbing.Hash, error) {
 	var hash plumbing.Hash
 	var ok bool
 
+	idx.offsetHashMutex.RLock()
+	idx.offsetHashMutex.RUnlock()
+
 	if idx.offsetHash != nil {
 		if hash, ok = idx.offsetHash[o]; ok {
 			return hash, nil
@@ -203,6 +211,10 @@ func (idx *MemoryIndex) genOffsetHash() error {
 
 	idx.offsetHash = make(map[int64]plumbing.Hash, count)
 	idx.offsetHashIsFull = true
+	idx.offsetHashMutex = sync.RWMutex{}
+
+	idx.offsetHashMutex.Lock()
+	defer idx.offsetHashMutex.Unlock()
 
 	var hash plumbing.Hash
 	i := uint32(0)
